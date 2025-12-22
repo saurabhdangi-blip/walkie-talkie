@@ -3,12 +3,8 @@ const path = require("path");
 const WebSocket = require("ws");
 
 const app = express();
-const server = app.listen(8080, () => {
-  console.log("🚀 Server running on http://localhost:8080");
-});
+const PORT = process.env.PORT || 8080;
 
-
-console.log("🚀 WS running on ws://localhost:8080");
 
 app.use(express.static(path.join(__dirname, "walkie-client", "build")));
 
@@ -18,13 +14,17 @@ app.get(/^\/(?!ws).*/, (req, res) => {
   );
 });
 
+const server = app.listen(PORT, () => {
+  console.log("🚀 Server running on port", PORT);
+});
+
+/* WebSocket */
 const wss = new WebSocket.Server({ server });
 const users = {};
 
 wss.on("connection", (ws) => {
-
   ws.on("message", (msg) => {
-    const data = JSON.parse(msg.toString());
+    const data = JSON.parse(msg);
 
     if (data.type === "register") {
       users[data.id] = ws;
@@ -32,7 +32,7 @@ wss.on("connection", (ws) => {
       console.log("✅ Registered", data.id);
     }
 
-    if (["offer", "answer", "ice"].includes(data.type)) {
+    if (["offer", "answer", "ice", "call-ended"].includes(data.type)) {
       users[data.target]?.send(JSON.stringify(data));
     }
   });

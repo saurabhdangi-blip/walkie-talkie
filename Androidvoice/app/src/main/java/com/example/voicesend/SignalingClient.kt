@@ -90,15 +90,27 @@ class SignalingClient(
         }
     }
 
+//    init {
+//        val client = OkHttpClient()
+//        client.newWebSocket(
+//            Request.Builder()
+//                .url("ws://192.168.1.110:8080")
+//                .build(),
+//            socketListener
+//        )
+//    }
+
     init {
         val client = OkHttpClient()
+
         client.newWebSocket(
             Request.Builder()
-                .url("ws://192.168.1.110:8080")
+                .url("wss://walkie-talkie-4fn8.onrender.com")
                 .build(),
             socketListener
         )
     }
+
 
     // ================= SENDERS =================
 

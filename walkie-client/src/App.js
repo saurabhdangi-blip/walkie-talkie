@@ -28,14 +28,16 @@ export default function App() {
 
   /* ▶ START */
   const start = async () => {
-    /* WebSocket */
-    wsRef.current = new WebSocket("ws://localhost:8080");
+    // ✅ Dynamic WebSocket URL (works both locally & on Render)
+    const wsProtocol = window.location.protocol === "https:" ? "wss" : "ws";
+    const wsHost = window.location.host; // automatically uses Render domain
+    const wsUrl = `${wsProtocol}://${wsHost}`;
+
+    wsRef.current = new WebSocket(wsUrl);
 
     wsRef.current.onopen = () => {
-      wsRef.current.send(
-        JSON.stringify({ type: "register", id: yourId })
-      );
-      console.log("✅ WebSocket connected");
+      wsRef.current.send(JSON.stringify({ type: "register", id: yourId }));
+      console.log("✅ WebSocket connected:", wsUrl);
     };
 
     /* PeerConnection */
@@ -43,25 +45,17 @@ export default function App() {
 
     /* 🎤 MIC (WEB → ANDROID) */
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    stream.getTracks().forEach(track =>
-      pcRef.current.addTrack(track, stream)
-    );
+    stream.getTracks().forEach(track => pcRef.current.addTrack(track, stream));
 
     /* 🎧 REMOTE AUDIO (ANDROID → WEB) */
     pcRef.current.ontrack = (event) => {
       console.log("🎧 Remote track received");
-
       const audio = document.getElementById("remoteAudio");
 
-      if (!audio.srcObject) {
-        audio.srcObject = new MediaStream();
-      }
-
+      if (!audio.srcObject) audio.srcObject = new MediaStream();
       audio.srcObject.addTrack(event.track);
 
-      if (audioUnlocked) {
-        audio.play().catch(() => {});
-      }
+      if (audioUnlocked) audio.play().catch(() => {});
     };
 
     /* ICE */
@@ -80,10 +74,8 @@ export default function App() {
       const data = JSON.parse(event.data);
       console.log("📥", data);
 
-      /* ANDROID → WEB OFFER */
       if (data.type === "offer") {
         await pcRef.current.setRemoteDescription(data.offer);
-
         const answer = await pcRef.current.createAnswer();
         await pcRef.current.setLocalDescription(answer);
 
@@ -97,17 +89,14 @@ export default function App() {
           pcRef.current.addIceCandidate(new RTCIceCandidate(c))
         );
         pendingIceRef.current = [];
-
         setInCall(true);
       }
 
-      /* WEB → ANDROID ANSWER */
       if (data.type === "answer") {
         await pcRef.current.setRemoteDescription(data.answer);
         setInCall(true);
       }
 
-      /* ICE */
       if (data.type === "ice") {
         const candidate = new RTCIceCandidate(data.candidate);
         if (pcRef.current.remoteDescription)
@@ -116,7 +105,6 @@ export default function App() {
           pendingIceRef.current.push(data.candidate);
       }
 
-      /* CALL CUT FROM REMOTE */
       if (data.type === "call-ended") {
         console.log("📴 Remote ended call");
         hangup();
@@ -131,12 +119,9 @@ export default function App() {
       return;
     }
 
-    await unlockAudio(); // 🔊 AUTO ENABLE SPEAKER
+    await unlockAudio();
 
-    const offer = await pcRef.current.createOffer({
-      offerToReceiveAudio: true,
-    });
-
+    const offer = await pcRef.current.createOffer({ offerToReceiveAudio: true });
     await pcRef.current.setLocalDescription(offer);
 
     wsRef.current.send(JSON.stringify({
@@ -204,22 +189,14 @@ export default function App() {
       <button
         onClick={hangup}
         disabled={!inCall}
-        style={{
-          marginLeft: 10,
-          background: "red",
-          color: "white"
-        }}
+        style={{ marginLeft: 10, background: "red", color: "white" }}
       >
         ❌ End Call
       </button>
 
       <br /><br />
 
-      <audio
-        id="remoteAudio"
-        playsInline
-        controls
-      />
+      <audio id="remoteAudio" playsInline controls />
     </div>
   );
 }

@@ -1,64 +1,53 @@
 import { useRef, useState } from "react";
 
 const iceConfig = {
-  iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+  iceServers: [{ urls: "stun:stun.l.google.com:19302" }]
 };
 
 export default function App() {
+
   const [yourId, setYourId] = useState("");
+  const [androidUsers, setAndroidUsers] = useState([]);
   const [targetId, setTargetId] = useState("");
-  const [audioUnlocked, setAudioUnlocked] = useState(false);
+  const [started, setStarted] = useState(false);
   const [inCall, setInCall] = useState(false);
 
   const wsRef = useRef(null);
   const pcRef = useRef(null);
-  const pendingIceRef = useRef([]);
+  const pendingIce = useRef([]);
 
-  /* 🔓 AUDIO UNLOCK (REQUIRED FOR CHROME / ANDROID) */
-  const unlockAudio = async () => {
-    const audio = document.getElementById("remoteAudio");
-    try {
-      await audio.play();
-      setAudioUnlocked(true);
-      console.log("🔊 Speaker unlocked");
-    } catch (e) {
-      console.error("❌ Audio unlock failed", e);
-    }
-  };
-
-  /* ▶ START */
+  /* START */
   const start = async () => {
-    // ✅ Dynamic WebSocket URL (works both locally & on Render)
-    const wsProtocol = window.location.protocol === "https:" ? "wss" : "ws";
-    const wsHost = window.location.host; // automatically uses Render domain
-    const wsUrl = `${wsProtocol}://${wsHost}`;
+    if (!yourId) return alert("Enter Web ID");
+
+    const wsUrl =
+      (window.location.protocol === "https:" ? "wss://" : "ws://") +
+      window.location.host;
 
     wsRef.current = new WebSocket(wsUrl);
 
     wsRef.current.onopen = () => {
-      wsRef.current.send(JSON.stringify({ type: "register", id: yourId }));
-      console.log("✅ WebSocket connected:", wsUrl);
+      wsRef.current.send(JSON.stringify({
+        type: "register",
+        id: yourId,
+        role: "web"
+      }));
+      console.log("✅ Web registered");
+      setStarted(true);
     };
 
-    /* PeerConnection */
     pcRef.current = new RTCPeerConnection(iceConfig);
 
-    /* 🎤 MIC (WEB → ANDROID) */
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    stream.getTracks().forEach(track => pcRef.current.addTrack(track, stream));
+    stream.getTracks().forEach(t => pcRef.current.addTrack(t, stream));
 
-    /* 🎧 REMOTE AUDIO (ANDROID → WEB) */
-    pcRef.current.ontrack = (event) => {
-      console.log("🎧 Remote track received");
+    pcRef.current.ontrack = (e) => {
       const audio = document.getElementById("remoteAudio");
-
       if (!audio.srcObject) audio.srcObject = new MediaStream();
-      audio.srcObject.addTrack(event.track);
-
-      if (audioUnlocked) audio.play().catch(() => {});
+      audio.srcObject.addTrack(e.track);
+      audio.play().catch(()=>{});
     };
 
-    /* ICE */
     pcRef.current.onicecandidate = (e) => {
       if (e.candidate && targetId) {
         wsRef.current.send(JSON.stringify({
@@ -69,134 +58,162 @@ export default function App() {
       }
     };
 
-    /* SIGNALING */
     wsRef.current.onmessage = async (event) => {
       const data = JSON.parse(event.data);
-      console.log("📥", data);
 
-      if (data.type === "offer") {
-        await pcRef.current.setRemoteDescription(data.offer);
-        const answer = await pcRef.current.createAnswer();
-        await pcRef.current.setLocalDescription(answer);
-
-        wsRef.current.send(JSON.stringify({
-          type: "answer",
-          target: data.from,
-          answer
-        }));
-
-        pendingIceRef.current.forEach(c =>
-          pcRef.current.addIceCandidate(new RTCIceCandidate(c))
-        );
-        pendingIceRef.current = [];
-        setInCall(true);
+      if (data.type === "android-users") {
+        setAndroidUsers(data.users);
       }
 
       if (data.type === "answer") {
         await pcRef.current.setRemoteDescription(data.answer);
+        pendingIce.current.forEach(c => pcRef.current.addIceCandidate(c));
+        pendingIce.current = [];
         setInCall(true);
       }
 
       if (data.type === "ice") {
-        const candidate = new RTCIceCandidate(data.candidate);
+        const c = new RTCIceCandidate(data.candidate);
         if (pcRef.current.remoteDescription)
-          pcRef.current.addIceCandidate(candidate);
+          pcRef.current.addIceCandidate(c);
         else
-          pendingIceRef.current.push(data.candidate);
+          pendingIce.current.push(c);
       }
 
       if (data.type === "call-ended") {
-        console.log("📴 Remote ended call");
         hangup();
       }
     };
   };
 
-  /* 📞 CALL */
-  const call = async () => {
-    if (!pcRef.current) {
-      alert("Click Start first");
-      return;
-    }
 
-    await unlockAudio();
+  const createPeer = async () => {
+  pcRef.current = new RTCPeerConnection(iceConfig);
 
-    const offer = await pcRef.current.createOffer({ offerToReceiveAudio: true });
-    await pcRef.current.setLocalDescription(offer);
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  stream.getTracks().forEach(t => pcRef.current.addTrack(t, stream));
 
-    wsRef.current.send(JSON.stringify({
-      type: "offer",
-      target: targetId,
-      from: yourId,
-      offer
-    }));
-
-    setInCall(true);
-    console.log("📤 Call started");
-  };
-
-  /* ❌ HANGUP */
-  const hangup = () => {
-    console.log("📴 Call ended");
-
-    pcRef.current?.getSenders().forEach(s => s.track?.stop());
-    pcRef.current?.close();
-    pcRef.current = null;
-
+  pcRef.current.ontrack = (e) => {
     const audio = document.getElementById("remoteAudio");
-    if (audio) {
-      audio.pause();
-      audio.srcObject = null;
-    }
-
-    wsRef.current?.send(JSON.stringify({
-      type: "call-ended",
-      target: targetId,
-      from: yourId
-    }));
-
-    setInCall(false);
+    if (!audio.srcObject) audio.srcObject = new MediaStream();
+    audio.srcObject.addTrack(e.track);
+    audio.play().catch(()=>{});
   };
+
+  pcRef.current.onicecandidate = (e) => {
+    if (e.candidate && targetId) {
+      wsRef.current.send(JSON.stringify({
+        type: "ice",
+        target: targetId,
+        candidate: e.candidate
+      }));
+    }
+  };
+};
+
+
+  /* CALL */
+  const call = async () => {
+  if (!pcRef.current) {
+    await createPeer();   // 🔥 recreate PC for every call
+  }
+
+  const offer = await pcRef.current.createOffer();
+  await pcRef.current.setLocalDescription(offer);
+
+  wsRef.current.send(JSON.stringify({
+    type: "offer",
+    from: yourId,
+    target: targetId,
+    offer
+  }));
+
+  console.log("📞 Calling", targetId);
+};
+
+  /* HANGUP */
+  // const hangup = () => {
+  //   pcRef.current?.close();
+  //   pcRef.current = null;
+  //   setInCall(false);
+  // };
+
+  const hangup = () => {
+  console.log("📴 Call ended");
+
+  wsRef.current?.send(JSON.stringify({
+    type: "call-ended",
+    target: targetId,
+    from: yourId
+  }));
+
+  pcRef.current?.getSenders().forEach(s => s.track?.stop());
+  pcRef.current?.close();
+  pcRef.current = null;
+
+  const audio = document.getElementById("remoteAudio");
+  if (audio) {
+    audio.pause();
+    audio.srcObject = null;
+  }
+
+  setInCall(false);
+};
+
 
   return (
     <div style={{ padding: 20 }}>
-      <h3>WebRTC Voice (Android ↔ Web)</h3>
+      <h2>Web → Android Walkie-Talkie</h2>
 
       <input
-        placeholder="Your ID"
+        placeholder="Web ID"
         value={yourId}
         onChange={e => setYourId(e.target.value)}
       />
+
       <br /><br />
 
-      <input
-        placeholder="Target ID"
+      <button onClick={start} disabled={started}>
+        ▶ Start
+      </button>
+
+      <br /><br />
+
+      <select
         value={targetId}
         onChange={e => setTargetId(e.target.value)}
-      />
-      <br /><br />
+      >
+        <option value="">Select Android Device</option>
+        {androidUsers.map(id => (
+          <option key={id} value={id}>{id}</option>
+        ))}
+      </select>
 
-      <button onClick={start}>▶ Start</button>
+      <br /><br />
 
       <button
         onClick={call}
-        disabled={inCall}
-        style={{ marginLeft: 10 }}
+        disabled={!started || !targetId || inCall}
       >
         📞 Call
       </button>
 
       <button
-        onClick={hangup}
-        disabled={!inCall}
-        style={{ marginLeft: 10, background: "red", color: "white" }}
-      >
-        ❌ End Call
-      </button>
+  onClick={hangup}
+  disabled={!inCall}
+  style={{
+    marginLeft: 10,
+    backgroundColor: "red",
+    color: "white"
+  }}
+>
+  ❌ End Call
+</button>
+
 
       <br /><br />
 
-      <audio id="remoteAudio" playsInline controls />
+      <audio id="remoteAudio" controls playsInline />
     </div>
   );
 }
